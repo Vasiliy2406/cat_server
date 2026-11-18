@@ -105,7 +105,11 @@ def update_progress():
     conn.commit()
     conn.close()
     
-    print(f"📥 [{ip}] Обновление от {user_id}: сытость {satiety}%, монеты {final_coins}")
+    ip = request.remote_addr
+    user_agent = request.headers.get('User-Agent', 'Unknown')[:30] # Берем первые 30 символов
+    current_time_str = time.strftime('%H:%M:%S', time.localtime())
+    
+    print(f"📥 [{current_time_str}] IP: {ip} | Браузер: {user_agent} | Игрок: {user_id} | Сытость: {satiety}% | Монеты: {final_coins}")
     return jsonify({"status": "ok"}), 200
 
 # --- ЗАГРУЗКА ДАННЫХ (Для игры) ---
