@@ -56,6 +56,7 @@ def options_update():
 # --- API ДЛЯ СОХРАНЕНИЯ ---
 @app.route('/update', methods=['POST'])
 def update_progress():
+    print("📥 СРАБОТАЛ ЗАПРОС /UPDATE!")
     ip = request.remote_addr
     
     # 1. ЗАЩИТА ОТ СПАМА
