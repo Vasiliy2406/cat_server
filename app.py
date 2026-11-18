@@ -6,12 +6,10 @@ import threading
 import os
 
 # --- НАСТРОЙКИ ---
-# Берем токен из переменных окружения Render
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
 if not BOT_TOKEN:
     print("❌ ОШИБКА: Переменная BOT_TOKEN не найдена в настройках Render!")
-    # Специально вызываем ошибку, чтобы Render показал, что не так
     raise ValueError("BOT_TOKEN is missing") 
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -21,7 +19,6 @@ app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    # Таблица: user_id, satiety, last_update, is_notified
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id TEXT PRIMARY KEY, satiety INTEGER, last_update INTEGER, is_notified INTEGER)''')
     conn.commit()
@@ -29,21 +26,29 @@ def init_db():
 
 init_db()
 
-# --- API ДЛЯ ИГРЫ ---
-# Обработка CORS (чтобы браузер не ругался)
+# --- БЕЗОПАСНОСТЬ И CORS ---
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+    # Разрешаем браузеру отправлять наш секретный заголовок
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Secret-Key')
     response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
     return response
 
-# Обработка OPTIONS запросов (чтобы не было 404)
 @app.route('/update', methods=['OPTIONS'])
 def options_update():
     return jsonify({"status": "ok"}), 200
+
+# --- API ДЛЯ ИГРЫ ---
 @app.route('/update', methods=['POST'])
 def update_progress():
+    # 1. ПРОВЕРКА СЕКРЕТНОГО КЛЮЧА
+    secret_key = request.headers.get('X-Secret-Key')
+    if secret_key != 'MySuperSecretKey_123': # <--- Твой пароль
+        print(f"⚠️ Попытка взлома! Пришел ключ: {secret_key}")
+        return jsonify({"error": "Unauthorized"}), 401
+
+    # 2. ПРИЕМ ДАННЫХ
     data = request.json
     if not data:
         return jsonify({"error": "No data"}), 400
@@ -55,7 +60,6 @@ def update_progress():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
     
-    # Если пользователь уже есть, обновляем данные. Если нет - создаем.
     c.execute('''INSERT INTO users (user_id, satiety, last_update, is_notified) 
                  VALUES (?, ?, ?, 0)
                  ON CONFLICT(user_id) DO UPDATE SET 
@@ -70,13 +74,12 @@ def update_progress():
 # --- ФОНОВАЯ ПРОВЕРКА (Уведомления) ---
 def check_hunger():
     while True:
-        time.sleep(60) # Проверяем раз в минуту (для теста)
+        time.sleep(60) 
         current_time = int(time.time())
         
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
         
-        # Ищем тех, кому еще не отправляли уведомление
         c.execute("SELECT user_id, satiety, last_update FROM users WHERE is_notified = 0")
         users = c.fetchall()
         
@@ -84,27 +87,21 @@ def check_hunger():
             user_id, satiety, last_update = user
             time_passed = current_time - last_update
             
-            # Логика: если прошло больше 5 минут (300 секунд) и сытость была низкой
             if time_passed > 300: 
                 try:
-                    # Отправляем сообщение
                     bot.send_message(user_id, "🐈 Твой котик голодает! Зайди в игру и покорми его.")
-                    # Отмечаем, что уведомление отправлено
                     c.execute("UPDATE users SET is_notified = 1 WHERE user_id = ?", (user_id,))
                     conn.commit()
                     print(f"✉️ Уведомление отправлено игроку {user_id}")
                 except Exception as e:
                     print(f"❌ Ошибка отправки для {user_id}: {e}")
-                    # Если бот заблокирован, тоже ставим флаг, чтобы не спамить
                     c.execute("UPDATE users SET is_notified = 1 WHERE user_id = ?", (user_id,))
                     conn.commit()
         
         conn.close()
 
-# Запускаем фоновую проверку в отдельном потоке
 threading.Thread(target=check_hunger, daemon=True).start()
 
 if __name__ == '__main__':
-    # Render автоматически передает порт через переменную окружения PORT
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
