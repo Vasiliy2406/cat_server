@@ -30,6 +30,18 @@ def init_db():
 init_db()
 
 # --- API ДЛЯ ИГРЫ ---
+# Обработка CORS (чтобы браузер не ругался)
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+    response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+    return response
+
+# Обработка OPTIONS запросов (чтобы не было 404)
+@app.route('/update', methods=['OPTIONS'])
+def options_update():
+    return jsonify({"status": "ok"}), 200
 @app.route('/update', methods=['POST'])
 def update_progress():
     data = request.json
