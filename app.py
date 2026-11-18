@@ -9,6 +9,7 @@ from collections import defaultdict
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 if not BOT_TOKEN:
+    print("❌ ОШИБКА: Переменная BOT_TOKEN не найдена!")
     raise ValueError("BOT_TOKEN is missing") 
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -31,7 +32,7 @@ def is_rate_limited(ip):
 def init_db():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    # Добавили колонку coins
+    # Таблица: user_id, satiety, coins, last_update, is_notified
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id TEXT PRIMARY KEY, satiety INTEGER, coins INTEGER, last_update INTEGER, is_notified INTEGER)''')
     conn.commit()
@@ -39,7 +40,7 @@ def init_db():
 
 init_db()
 
-# --- CORS ---
+# --- CORS (чтобы браузер не блокировал запросы) ---
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -51,7 +52,7 @@ def after_request(response):
 def options_update():
     return jsonify({"status": "ok"}), 200
 
-# --- API ДЛЯ ИГРЫ ---
+# --- API ДЛЯ СОХРАНЕНИЯ ---
 @app.route('/update', methods=['POST'])
 def update_progress():
     ip = request.remote_addr
@@ -91,7 +92,8 @@ def update_progress():
     final_coins = client_coins
     if row:
         server_coins = row[0]
-        if client_coins > server_coins + 50: # Если прирост больше 50 монет за раз
+        # Если прирост больше 50 монет за раз - это взлом
+        if client_coins > server_coins + 50: 
             print(f"🚨 ВЗЛОМ! {user_id} (IP: {ip}) пытался накрутить {client_coins} вместо {server_coins}")
             final_coins = server_coins
     
@@ -105,14 +107,16 @@ def update_progress():
     conn.commit()
     conn.close()
     
+    # --- КРАСИВЫЕ ЛОГИ ---
     ip = request.remote_addr
-    user_agent = request.headers.get('User-Agent', 'Unknown')[:30] # Берем первые 30 символов
+    user_agent = request.headers.get('User-Agent', 'Unknown')[:30]
     current_time_str = time.strftime('%H:%M:%S', time.localtime())
     
     print(f"📥 [{current_time_str}] IP: {ip} | Браузер: {user_agent} | Игрок: {user_id} | Сытость: {satiety}% | Монеты: {final_coins}")
+    
     return jsonify({"status": "ok"}), 200
 
-# --- ЗАГРУЗКА ДАННЫХ (Для игры) ---
+# --- API ДЛЯ ЗАГРУЗКИ (при старте игры) ---
 @app.route('/load/<user_id>', methods=['GET'])
 def load_progress(user_id):
     ip = request.remote_addr
@@ -128,7 +132,8 @@ def load_progress(user_id):
     conn.close()
 
     if row:
-        print(f"☁️ [{ip}] Загрузка данных для {user_id}: {row[0]}% сытости, {row[1]} монет")
+        current_time_str = time.strftime('%H:%M:%S', time.localtime())
+        print(f"☁️ [{current_time_str}] IP: {ip} | Загрузка данных для {user_id}: {row[0]}% сытости, {row[1]} монет")
         return jsonify({"satiety": row[0], "coins": row[1]}), 200
     else:
         return jsonify({"error": "User not found"}), 404
