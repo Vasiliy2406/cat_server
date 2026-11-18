@@ -6,10 +6,15 @@ import threading
 import os
 
 # --- НАСТРОЙКИ ---
-# Вставь сюда токен своего бота (получи у @BotFather)
-BOT_TOKEN = 'ТВОЙ_ТОКЕН_ЗДЕСЬ'
-bot = telebot.TeleBot(BOT_TOKEN)
+# Берем токен из переменных окружения Render
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
+if not BOT_TOKEN:
+    print("❌ ОШИБКА: Переменная BOT_TOKEN не найдена в настройках Render!")
+    # Специально вызываем ошибку, чтобы Render показал, что не так
+    raise ValueError("BOT_TOKEN is missing") 
+
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # --- БАЗА ДАННЫХ (SQLite) ---
@@ -28,6 +33,9 @@ init_db()
 @app.route('/update', methods=['POST'])
 def update_progress():
     data = request.json
+    if not data:
+        return jsonify({"error": "No data"}), 400
+
     user_id = str(data.get('user_id'))
     satiety = int(data.get('satiety'))
     last_time = int(time.time())
@@ -44,6 +52,7 @@ def update_progress():
     
     conn.commit()
     conn.close()
+    print(f"📥 Обновление от {user_id}: сытость {satiety}%")
     return jsonify({"status": "ok"}), 200
 
 # --- ФОНОВАЯ ПРОВЕРКА (Уведомления) ---
@@ -54,8 +63,8 @@ def check_hunger():
         
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
-        # Ищем тех, кто не заходил больше 5 минут (для теста) и у кого голод падает
-        # (В реальной игре тут будет расчет: сколько времени прошло * скорость голода)
+        
+        # Ищем тех, кому еще не отправляли уведомление
         c.execute("SELECT user_id, satiety, last_update FROM users WHERE is_notified = 0")
         users = c.fetchall()
         
@@ -64,15 +73,19 @@ def check_hunger():
             time_passed = current_time - last_update
             
             # Логика: если прошло больше 5 минут (300 секунд) и сытость была низкой
-            if time_passed > 300: # 300 секунд = 5 минут (для теста)
-                # В реальности тут надо пересчитать сытость, но для теста просто шлем
+            if time_passed > 300: 
                 try:
+                    # Отправляем сообщение
                     bot.send_message(user_id, "🐈 Твой котик голодает! Зайди в игру и покорми его.")
                     # Отмечаем, что уведомление отправлено
                     c.execute("UPDATE users SET is_notified = 1 WHERE user_id = ?", (user_id,))
                     conn.commit()
+                    print(f"✉️ Уведомление отправлено игроку {user_id}")
                 except Exception as e:
-                    print(f"Ошибка отправки для {user_id}: {e}")
+                    print(f"❌ Ошибка отправки для {user_id}: {e}")
+                    # Если бот заблокирован, тоже ставим флаг, чтобы не спамить
+                    c.execute("UPDATE users SET is_notified = 1 WHERE user_id = ?", (user_id,))
+                    conn.commit()
         
         conn.close()
 
@@ -80,4 +93,6 @@ def check_hunger():
 threading.Thread(target=check_hunger, daemon=True).start()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # Render автоматически передает порт через переменную окружения PORT
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
