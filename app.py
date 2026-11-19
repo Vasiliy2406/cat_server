@@ -14,7 +14,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# --- ЗАЩИТА ОТ СПАМА (Rate Limiting) ---
+# --- ЗАЩИТА ОТ СПАМА ---
 request_counts = defaultdict(list)
 
 def is_rate_limited(ip):
@@ -25,12 +25,13 @@ def is_rate_limited(ip):
     request_counts[ip].append(now)
     return False
 
-# --- БАЗА ДАННЫХ (SQLite) ---
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
+    # ТЕПЕРЬ ЗДЕСЬ ЕСТЬ КОЛОНКА breed
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id TEXT PRIMARY KEY, satiety INTEGER, coins INTEGER, last_update INTEGER, is_notified INTEGER)''')
+                 (user_id TEXT PRIMARY KEY, satiety INTEGER, coins INTEGER, breed TEXT, last_update INTEGER, is_notified INTEGER)''')
     conn.commit()
     conn.close()
 
@@ -54,12 +55,10 @@ def update_progress():
     ip = request.remote_addr
     
     if is_rate_limited(ip):
-        app.logger.info(f"🚫 СПАМ! IP {ip} заблокирован")
         return jsonify({"error": "Too Many Requests"}), 429
 
     secret_key = request.headers.get('X-Secret-Key')
     if secret_key != 'MySuperSecretKey_123':
-        app.logger.info(f"⚠️ Попытка взлома с IP {ip}! Неверный ключ.")
         return jsonify({"error": "Unauthorized"}), 401
 
     data = request.json
@@ -70,8 +69,8 @@ def update_progress():
         user_id = str(data.get('user_id'))
         satiety = int(data.get('satiety'))
         client_coins = int(data.get('coins', 0))
+        breed = str(data.get('breed', 'orange')) # <--- ЧИТАЕМ ПОРОДУ
     except (ValueError, TypeError):
-        app.logger.info(f"⚠️ Ошибка формата данных от {ip}")
         return jsonify({"error": "Bad Request"}), 400
 
     last_time = int(time.time())
@@ -79,6 +78,7 @@ def update_progress():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
     
+    # ПРОВЕРКА НА НАКРУТКУ
     c.execute("SELECT coins FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
 
@@ -86,45 +86,38 @@ def update_progress():
     if row:
         server_coins = row[0]
         if client_coins > server_coins + 50: 
-            app.logger.info(f"🚨 ВЗЛОМ! {user_id} (IP: {ip}) пытался накрутить {client_coins} вместо {server_coins}")
             final_coins = server_coins
     
-    c.execute('''INSERT INTO users (user_id, satiety, coins, last_update, is_notified) 
-                 VALUES (?, ?, ?, ?, 0)
+    # СОХРАНЕНИЕ (с breed)
+    c.execute('''INSERT INTO users (user_id, satiety, coins, breed, last_update, is_notified) 
+                 VALUES (?, ?, ?, ?, ?, 0)
                  ON CONFLICT(user_id) DO UPDATE SET 
-                 satiety=excluded.satiety, coins=excluded.coins, last_update=excluded.last_update, is_notified=0''', 
-              (user_id, satiety, final_coins, last_time))
+                 satiety=excluded.satiety, coins=excluded.coins, breed=excluded.breed, last_update=excluded.last_update, is_notified=0''', 
+              (user_id, satiety, final_coins, breed, last_time))
     
     conn.commit()
     conn.close()
     
-    user_agent = request.headers.get('User-Agent', 'Unknown')[:30]
-    current_time_str = time.strftime('%H:%M:%S', time.localtime())
-    
-    # ИСПОЛЬЗУЕМ app.logger вместо print
-    app.logger.info(f"📥 [{current_time_str}] IP: {ip} | Браузер: {user_agent} | Игрок: {user_id} | Сытость: {satiety}% | Монеты: {final_coins}")
-    
+    app.logger.info(f"📥 Игрок: {user_id} | Монеты: {final_coins} | Порода: {breed}")
     return jsonify({"status": "ok"}), 200
 
 # --- API ДЛЯ ЗАГРУЗКИ ---
 @app.route('/load/<user_id>', methods=['GET'])
 def load_progress(user_id):
-    ip = request.remote_addr
     secret_key = request.headers.get('X-Secret-Key')
-    
     if secret_key != 'MySuperSecretKey_123':
         return jsonify({"error": "Unauthorized"}), 401
 
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    c.execute("SELECT satiety, coins FROM users WHERE user_id = ?", (user_id,))
+    # БЕРЕМ ПОРОДУ ИЗ БАЗЫ
+    c.execute("SELECT satiety, coins, breed FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     conn.close()
 
     if row:
-        current_time_str = time.strftime('%H:%M:%S', time.localtime())
-        app.logger.info(f"☁️ [{current_time_str}] IP: {ip} | Загрузка данных для {user_id}: {row[0]}% сытости, {row[1]} монет")
-        return jsonify({"satiety": row[0], "coins": row[1]}), 200
+        app.logger.info(f"☁️ Загрузка для {user_id}: {row[0]}% сытости, {row[1]} монет, порода: {row[2]}")
+        return jsonify({"satiety": row[0], "coins": row[1], "breed": row[2]}), 200
     else:
         return jsonify({"error": "User not found"}), 404
 
@@ -148,9 +141,7 @@ def check_hunger():
                     bot.send_message(user_id, "🐈 Твой котик голодает! Зайди в игру и покорми его.")
                     c.execute("UPDATE users SET is_notified = 1 WHERE user_id = ?", (user_id,))
                     conn.commit()
-                    app.logger.info(f"✉️ Уведомление отправлено игроку {user_id}")
                 except Exception as e:
-                    app.logger.info(f"❌ Ошибка отправки для {user_id}: {e}")
                     c.execute("UPDATE users SET is_notified = 1 WHERE user_id = ?", (user_id,))
                     conn.commit()
         
